@@ -2,5 +2,6 @@
 data/
 venv/
 bazel-*
+.DS_Store
 
 notebooks/
