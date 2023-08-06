@@ -18,6 +18,8 @@ class DoubleConv(nn.Module):
         )
 
     def forward(self, x):
+        print("DoubleConv")
+        print(x.size())
         return self.double_conv(x)
 
 
@@ -25,11 +27,12 @@ class Contract(nn.Module):
     def __init__(self, in_channels, out_channels):
         super().__init__()
         self.maxpool_conv = nn.Sequential(
-            nn.MaxPool2d(2, stride=2),
+            nn.MaxPool2d(2),
             DoubleConv(in_channels, out_channels)
         )
 
     def forward(self, x):
+        print(x.size())
         return self.maxpool_conv(x)
 
 
@@ -42,6 +45,7 @@ class Expand(nn.Module):
 
     def forward(self, x1, x2):
         x1 = self.up(x1)
+        print(x1.size(), x2.size())
         x = torch.cat([x2, x1], dim=1)
         return self.conv(x)
 
@@ -52,7 +56,7 @@ class Final(nn.Module):
         self.final_conv = nn.Conv2d(in_channels, out_channels, kernel_size=1)
 
     def forward(self, x):
-        return self.conv
+        return self.final_conv(x)
 
 
 class UNet(nn.Module):
@@ -74,18 +78,18 @@ class UNet(nn.Module):
         self.contract4 = Contract(features3, features4)
 
         self.expand3 = Expand(features4, features3)
-        self.expand2 = Expand(features4, features3)
-        self.expand1 = Expand(features4, features3)
-        self.expand0 = Expand(features4, features3)
+        self.expand2 = Expand(features3, features2)
+        self.expand1 = Expand(features2, features1)
+        self.expand0 = Expand(features1, features0)
 
-        self.out0 = Final(features4, out_channels)
+        self.out0 = Final(features0, out_channels)
 
     def forward(self, x):
         x0 = self.in0(x)
         x1 = self.contract1(x0)
         x2 = self.contract2(x1)
-        x3 = self.contract2(x2)
-        x = self.contract2(x3)
+        x3 = self.contract3(x2)
+        x = self.contract4(x3)
 
         x = self.expand3(x, x3)
         x = self.expand2(x, x2)
