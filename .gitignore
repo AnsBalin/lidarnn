@@ -1,7 +1,6 @@
 .vscode/
 data/
 venv/
-bazel-*
 .DS_Store
 *__pycache__/
 notebooks/
