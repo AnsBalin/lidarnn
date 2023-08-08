@@ -1,5 +1,6 @@
 .vscode/
-data/
+data/monuments/
+data/synthetic/
 venv/
 .DS_Store
 *__pycache__/
