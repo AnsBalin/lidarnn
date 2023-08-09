@@ -1,96 +1,63 @@
-import shapefile
-import matplotlib.pyplot as plt
-import random
-from io import BytesIO
-from PIL import Image
+
+from affine import Affine
+import geopandas as gpd
 import numpy as np
+from PIL import Image
+from tqdm import tqdm
+
+from rasterio.features import rasterize
+from rasterio.features import geometry_mask
 
 
-def make_mask(shape, L):
-    points = shape.points
-    (xmin, ymin, xmax, ymax) = shape.bbox
-    xs = np.array([i[0] for i in points])
-    ys = np.array([i[1] for i in points])
+def make_mask(geom, L):
+    (xmin, ymin, xmax, ymax) = geom.bounds
     center = ((xmin+xmax)/2.0, (ymin+ymax)/2.0)
-    L = 500
+
     x_off = np.random.uniform(0, L, 1)
     y_off = np.random.uniform(0, L, 1)
 
-    xs_ = xs - center[0] + x_off
-    ys_ = ys - center[1] + y_off
+    s = 2
+    transform = Affine(s, 0, (center[0])-s*x_off,
+                       0, s, (center[1])-s*y_off)
 
-    return xs_, ys_
+    mask = geometry_mask([geom],
+                         transform=transform, invert=True, out_shape=(L, L))
 
-
-def add_gaussian_noise(image, mean=0, sigma=25):
-    """Add Gaussian noise to an image.
-
-    Parameters:
-        image (numpy.array): Input image.
-        mean (float): Mean of the Gaussian noise.
-        sigma (float): Standard deviation of the Gaussian noise.
-
-    Returns:
-        numpy.array: Image with added Gaussian noise.
-    """
-    row, col, ch = image.shape
-    gauss = np.random.normal(mean, sigma, (row, col, ch))
-    gauss = gauss.reshape(row, col, ch)
-    noisy = image + gauss
-    return np.clip(noisy, 0, 255).astype(np.uint8)
+    mask_image = Image.fromarray((mask * 255).astype(np.uint8))
+    return mask_image, transform
 
 
-def make_image(shape, L, type, size):
-    xs, ys = make_mask(shape, L)
+def add_noise(image, mu, sigma):
+    row, col = image.shape
+    image2 = (1-np.dstack([image, image, image])) * 255
+    gauss = np.random.normal(mu, sigma, (row, col, 3))
+    gauss = gauss.reshape(row, col, 3)
+    noisy = image2 + gauss
+    feature = np.clip(noisy, 0, 255).astype(np.uint8)
 
-    if type == 'mask':
-        plt.fill(xs, ys)
-    else:
-        plt.plot(xs, ys)
-    plt.xlim(0, L)
-    plt.ylim(0, L)
-    plt.gca().set_aspect('equal', adjustable='box')
+    return feature
 
-    plt.gcf().canvas.draw()
-    bbox = plt.gca().get_window_extent().transformed(
-        plt.gcf().dpi_scale_trans.inverted())
 
-    # Hide axes
-    plt.gca().xaxis.set_visible(False)
-    plt.gca().yaxis.set_visible(False)
+def make_feature(geom, L, transform):
+    boundary = geom.boundary
+    image = np.zeros((L, L), dtype=np.uint8)
 
-    # Save to a BytesIO object
-    buf = BytesIO()
-    plt.savefig(buf, format='png', bbox_inches=bbox,
-                pad_inches=0, dpi=size/bbox.width)
-    buf.seek(0)
-    plt.close()
+    rasterize([boundary], out=image, transform=transform)
 
-    # Use PIL to convert to an array
-    img = Image.open(buf)
-    img_array = np.array(img)
-
-    if type == 'image':
-        img_array = add_gaussian_noise(img_array, 20)
-
-    return img_array
+    feature = add_noise(image, 0, 100)
+    feature_image = Image.fromarray(feature)
+    return feature_image
 
 
 if __name__ == '__main__':
-    sf = shapefile.Reader("monuments/Scheduled_Monuments.shp")
-    shapes = sf.shapes()
 
-    for i in range(100):
-        shape = shapes[i]
-        seed = len(shape.points)
-        L = 500
-        np.random.seed(seed)
-        image = make_image(shape, L, 'image', 128)
-        np.random.seed(seed)
-        mask = make_image(shape, L, 'mask', 128)
+    sf = gpd.read_file("monuments/Scheduled_Monuments.shp")
 
-        im = Image.fromarray(image)
-        im.save("synthetic/image_{i:d}.png".format(i=i))
+    for i in tqdm(range(1000)):
+        geom = sf['geometry'][i]
+        L = 256
+        mask_image, transform = make_mask(geom, L)
+        feature_image = make_feature(geom, L, transform)
 
-        mk = Image.fromarray(mask)
-        mk.save("synthetic/mask_{i:d}.png".format(i=i))
+        mask_image.save("synthetic/mask_{i:d}.png".format(i=i))
+        feature_image.save("synthetic/feature_{i:d}.png".format(i=i))
