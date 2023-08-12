@@ -18,8 +18,6 @@ class DoubleConv(nn.Module):
         )
 
     def forward(self, x):
-        print("DoubleConv")
-        print(x.size())
         return self.double_conv(x)
 
 
@@ -32,7 +30,6 @@ class Contract(nn.Module):
         )
 
     def forward(self, x):
-        print(x.size())
         return self.maxpool_conv(x)
 
 
@@ -45,7 +42,6 @@ class Expand(nn.Module):
 
     def forward(self, x1, x2):
         x1 = self.up(x1)
-        print(x1.size(), x2.size())
         x = torch.cat([x2, x1], dim=1)
         return self.conv(x)
 

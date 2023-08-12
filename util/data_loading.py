@@ -2,6 +2,8 @@ from torch.utils.data import Dataset
 from PIL import Image
 import torch
 
+from torchvision.transforms.functional import pil_to_tensor
+
 
 class LidarDatasetSynthetic(Dataset):
     def __init__(self, feature_dir, mask_dir, N=100):
@@ -31,6 +33,6 @@ class LidarDatasetSynthetic(Dataset):
         mask = self.masks[index]
 
         return {
-            'feature': torch.as_tensor(feature.copy()).float().contiguous(),
-            'mask': torch.as_tensor(mask.copy()).float().contiguous()
+            'feature': pil_to_tensor(feature.copy()).float().contiguous(),
+            'mask': pil_to_tensor(mask.copy()).float().contiguous()
         }
