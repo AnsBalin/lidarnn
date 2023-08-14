@@ -54,10 +54,13 @@ def train_model(
 
                 optimizer.zero_grad(set_to_none=True)
 
+                loss.backward()
+                optimizer.step()
+
                 # number in this batch (not necessarily batch_size)
                 pbar.update(features.shape[0])
                 pbar.set_postfix(**{'loss (batch)': loss.item()})
-    pass
+    return model
 
 
 if __name__ == "__main__":
@@ -74,5 +77,5 @@ if __name__ == "__main__":
     momentum = 0.999
     pct_val = 0.1
 
-    train_model(model, "data/synthetic", "data/synthetic",
+    model = train_model(model, "data/synthetic", "data/synthetic",
                 1, 5, 1e-5, 1e-8, 0.999, 0.1)
