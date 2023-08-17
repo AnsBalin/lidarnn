@@ -1,6 +1,7 @@
 from torch.utils.data import Dataset
 from PIL import Image
 import torch
+import numpy as np
 
 from torchvision.transforms.functional import pil_to_tensor
 
@@ -32,7 +33,28 @@ class LidarDatasetSynthetic(Dataset):
         feature = self.features[index]
         mask = self.masks[index]
 
+        feature = self.preprocess(feature, False)
+        mask = self.preprocess(mask, True)
+
         return {
-            'feature': pil_to_tensor(feature.copy()).float().contiguous(),
-            'mask': pil_to_tensor(mask.copy()).float().contiguous()
+            'feature': torch.as_tensor(feature.copy()).float().contiguous(),
+            'mask': torch.as_tensor(mask.copy()).float().contiguous()
         }
+
+    def preprocess(self, pil_img, is_mask=False):
+        w, h = pil_img.size
+
+        img = np.asarray(pil_img)
+        
+        if is_mask:
+            mask = np.zeros((w,h), dtype=np.int64)
+            
+            mask[img > 254.] = 1
+
+            return mask
+
+        else: 
+            img = img.transpose((2, 0, 1))
+            img = img / 255.0
+
+            return img

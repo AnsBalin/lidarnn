@@ -1,17 +1,35 @@
 import logging
 from tqdm import tqdm
+import math
 import torch
 import torch.nn as nn
 from torch import optim
 from torch.utils.data import DataLoader, random_split
+import torch.nn.functional as F
 
 from model.unet import UNet
 
 from util.data_loading import LidarDatasetSynthetic
 
 
+
+def dice_coeff(input, target, reduce_batch_first = False, epsilon= 1e-6):
+    # Average of Dice coefficient for all batches, or for a single mask
+    assert input.size() == target.size()
+    assert input.dim() == 3 or not reduce_batch_first
+
+    sum_dim = (-1, -2) if input.dim() == 2 or not reduce_batch_first else (-1, -2, -3)
+
+    inter = 2 * (input * target).sum(dim=sum_dim)
+    sets_sum = input.sum(dim=sum_dim) + target.sum(dim=sum_dim)
+    sets_sum = torch.where(sets_sum == 0, inter, sets_sum)
+
+    dice = (inter + epsilon) / (sets_sum + epsilon)
+    return dice.mean()
+
 def train_model(
         model,
+        device,
         features_path,
         masks_path,
         epochs: int = 10,
@@ -39,27 +57,40 @@ def train_model(
                               momentum=momentum,
                               foreach=True)
 
+    grad_scaler = torch.cuda.amp.GradScaler(enabled=True)
     criterion = nn.BCEWithLogitsLoss()
 
     for epoch in range(1, epochs + 1):
         model.train()
-
+        epoch_loss = 0
+        i = 1
         with tqdm(total=n_train, desc=f'Epoch {epoch}/{epochs}', unit='img') as pbar:
             for batch in train_loader:
-                features, masks = batch['feature'], batch['mask']
-
-                masks_pred = model(features)
-
-                loss = criterion(masks_pred, masks.float())
-
                 optimizer.zero_grad(set_to_none=True)
 
-                loss.backward()
-                optimizer.step()
+                features, masks = batch['feature'], batch['mask']
 
+                features = features.to(device='cuda', dtype=torch.float32, memory_format=torch.channels_last)
+                masks = masks.to(device='cuda', dtype=torch.float32)
+
+                with torch.autocast(device_type='cuda', enabled=True):
+                    masks_pred = model(features)
+                    loss = criterion(masks_pred.squeeze(1), masks.float())
+                    loss += 1. - dice_coeff(F.sigmoid(masks_pred.squeeze(1)), masks.float())
+
+                if math.isnan(loss.item()):
+                    return model
+                
+                grad_scaler.scale(loss).backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                grad_scaler.step(optimizer)
+                grad_scaler.update()
+                epoch_loss += loss.item()
                 # number in this batch (not necessarily batch_size)
                 pbar.update(features.shape[0])
-                pbar.set_postfix(**{'loss (batch)': loss.item()})
+                pbar.set_postfix(**{'loss (batch)': epoch_loss / i})
+                i = i + 1
+                
     return model
 
 
@@ -68,7 +99,12 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO,
                         format='%(levelname)s: %(message)s')
 
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    logging.info(f'Using device {device}')
+
     model = UNet(3, 1, 64)
+    model = model.to(memory_format=torch.channels_last)
+    model.to(device=device)
 
     # Training Parameters
     batch_size = 10
@@ -77,5 +113,5 @@ if __name__ == "__main__":
     momentum = 0.999
     pct_val = 0.1
 
-    model = train_model(model, "data/synthetic", "data/synthetic",
+    model = train_model(model, device, "data/synthetic", "data/synthetic",
                 1, 5, 1e-5, 1e-8, 0.999, 0.1)
