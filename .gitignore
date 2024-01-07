@@ -1,8 +1,20 @@
-.vscode/
-data/monuments/
-data/synthetic/
-venv/
+# Dot files and env
 .DS_Store
+.vscode/
 *__pycache__/
+venv/
+sftpconfig.json
+
+# notebooks
 notebooks/
 *.ipynb
+
+# data 
+data/monuments/
+data/synthetic/
+data/gb/
+data/lidar
+
+# logs 
+*.txt
+*.log
