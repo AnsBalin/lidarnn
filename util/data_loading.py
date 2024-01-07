@@ -45,15 +45,15 @@ class LidarDatasetSynthetic(Dataset):
         w, h = pil_img.size
 
         img = np.asarray(pil_img)
-        
+
         if is_mask:
-            mask = np.zeros((w,h), dtype=np.int64)
-            
+            mask = np.zeros((w, h), dtype=np.int64)
+
             mask[img > 254.] = 1
 
             return mask
 
-        else: 
+        else:
             img = img.transpose((2, 0, 1))
             img = img / 255.0
 

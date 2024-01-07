@@ -12,8 +12,7 @@ from model.unet import UNet
 from util.data_loading import LidarDatasetSynthetic
 
 
-
-def dice_coeff(input, target, reduce_batch_first = False, epsilon= 1e-6):
+def dice_coeff(input, target, reduce_batch_first=False, epsilon=1e-6):
     # Average of Dice coefficient for all batches, or for a single mask
     assert input.size() == target.size()
     assert input.dim() == 3 or not reduce_batch_first
@@ -26,6 +25,7 @@ def dice_coeff(input, target, reduce_batch_first = False, epsilon= 1e-6):
 
     dice = (inter + epsilon) / (sets_sum + epsilon)
     return dice.mean()
+
 
 def train_model(
         model,
@@ -70,17 +70,20 @@ def train_model(
 
                 features, masks = batch['feature'], batch['mask']
 
-                features = features.to(device='cuda', dtype=torch.float32, memory_format=torch.channels_last)
+                features = features.to(
+                    device='cuda', dtype=torch.float32, memory_format=torch.channels_last)
                 masks = masks.to(device='cuda', dtype=torch.float32)
 
                 with torch.autocast(device_type='cuda', enabled=True):
                     masks_pred = model(features)
                     loss = criterion(masks_pred.squeeze(1), masks.float())
-                    loss += 1. - dice_coeff(F.sigmoid(masks_pred.squeeze(1)), masks.float())
+                    loss += 1. - \
+                        dice_coeff(F.sigmoid(masks_pred.squeeze(1)),
+                                   masks.float())
 
                 if math.isnan(loss.item()):
                     return model
-                
+
                 grad_scaler.scale(loss).backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                 grad_scaler.step(optimizer)
@@ -90,7 +93,7 @@ def train_model(
                 pbar.update(features.shape[0])
                 pbar.set_postfix(**{'loss (batch)': epoch_loss / i})
                 i = i + 1
-                
+
     return model
 
 
@@ -114,4 +117,4 @@ if __name__ == "__main__":
     pct_val = 0.1
 
     model = train_model(model, device, "data/synthetic", "data/synthetic",
-                1, 5, 1e-5, 1e-8, 0.999, 0.1)
+                        1, 5, 1e-5, 1e-8, 0.999, 0.1)
