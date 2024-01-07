@@ -1,11 +1,11 @@
 import os
-from contextlib import contextmanager
-from tqdm import tqdm
-import json
-# import pysftp
-import time
-import paramiko
 import socket
+import paramiko
+import json
+import logging
+from tqdm import tqdm
+
+TQDM_FMT = '{desc:<32}: {percentage:3.0f}%|{bar}| {n:3.0f}/{total_fmt} [{elapsed}<{remaining}, ' '{rate_fmt}{postfix}]'
 
 
 class ConnectionException(Exception):
@@ -15,6 +15,10 @@ class ConnectionException(Exception):
 
 
 class SFTPConnection(object):
+    '''
+    Simple wrapper class to handle sftp connection. Adapted from pysftp
+    '''
+
     def __init__(self, host, username, password, port=22):
 
         self._sftp_live = False
@@ -27,27 +31,30 @@ class SFTPConnection(object):
 
         try:
             self._transport = paramiko.Transport((host, port))
-
         except (AttributeError, socket.gaierror):
             raise ConnectionException(host, port)
 
         self._transport.connect(**self._tconnect)
 
     def _sftp_connect(self):
+        '''Cached connection'''
         if not self._sftp_live:
             self._sftp = paramiko.SFTPClient.from_transport(self._transport)
             self._sftp_live = True
 
     def get(self, remotepath, localpath, callback=None, prefetch=False, max_concurrent_prefetch_requests=None):
+        '''Wrapper for get()'''
         self._sftp_connect()
         self._sftp.get(remotepath, localpath, callback=callback,
                        prefetch=prefetch, max_concurrent_prefetch_requests=max_concurrent_prefetch_requests)
 
     def ls(self, remotepath='.'):
+        '''Wrapper for listdir_attr'''
         self._sftp_connect()
         return self._sftp.listdir_attr(remotepath)
 
     def close(self):
+        '''Close sftp connection and transport'''
         if self._sftp_live:
             self._sftp.close()
             self._sftp_live = False
@@ -73,7 +80,6 @@ class SFTPConnection(object):
 
 def sftp_cfg(json_fname):
     '''Read sftp config from file. Contents should be:
-
     {
         "SFTP_USER": "[username]",
         "SFTP_HOST": "[host]",
@@ -100,15 +106,14 @@ def list_files(sftp_config, remote_ls_file=""):
 
     if remote_ls_file=="", print to console, else write output to remote_ls_file 
     '''
-#    cnopts = pysftp.CnOpts()
-#    cnopts.hostkeys = None
 
     with SFTPConnection(host=sftp_config["SFTP_HOST"],
                         username=sftp_config["SFTP_USER"],
                         password=sftp_config["SFTP_PASSWORD"],
                         #                           cnopts=cnopts
                         ) as sftp:
-        print(f"Connection made to {sftp_config['SFTP_HOST']}.")
+
+        logging.info(f"[CONNECTED] to host {sftp_config['SFTP_HOST']}.")
         directory_structure = sftp.ls()
 
         if remote_ls_file:
@@ -117,14 +122,15 @@ def list_files(sftp_config, remote_ls_file=""):
                     f.write(f"{attr.filename}\t{attr.st_size}\n")
         else:
             for attr in directory_structure:
-                print(f"{attr.filename}\t{attr.st_size}\n")
+                logging.info(f"{attr.filename}\t{attr.st_size}\n")
 
 
 def compare_remote_listing_to_already_downloaded(remote_ls_file, local_directory, download_queue):
     '''Compares the contents of remote_ls_file to the contents of local_directory, and enumerates a list
     of all files yet to be downloaded, and writes this list to download_queue    
     '''
-
+    logging.info(
+        f"[COMPARE] remote listing file to already downloaded zip files.")
     local_files = set(os.listdir(local_directory))
 
     with open(remote_ls_file, 'r') as f:
@@ -172,19 +178,30 @@ def download_many(sftp_config, local_directory, download_queue, remote_ls_file, 
     if N is not None:
         files_to_download = files_to_download[:N]
 
-    print(f"Downloading {N} {len(files_to_download)} files.")
+    logging.info(f"Downloading {N} {len(files_to_download)} files.")
     count = 0
 
     with SFTPConnection(host=sftp_config["SFTP_HOST"],
                         username=sftp_config["SFTP_USER"],
                         password=sftp_config["SFTP_PASSWORD"],
                         ) as sftp:
-        print(f"[CONNECTED] to host {sftp_config['SFTP_HOST']}")
+        logging.info(f"[CONNECTED] to host {sftp_config['SFTP_HOST']}")
 
-        with tqdm(total=len(files_to_download), unit='file', desc="Downloading files") as pbar:
+        with tqdm(total=len(files_to_download),
+                  unit='file',
+                  desc="Downloading files",
+                  position=0,
+                  bar_format=TQDM_FMT) as pbar:
             for file_name in files_to_download:
-                with tqdm(total=100, unit='%', desc=f"{file_name}") as pbar_inner:
+                with tqdm(total=100,
+                          unit='%',
+                          desc=f"{file_name}",
+                          position=1,
+                          leave=False,
+                          bar_format=TQDM_FMT) as pbar_inner:
                     try:
+
+                        logging.info(f"[DOWNLOADING] {file_name}")
                         remote_file_path = os.path.join(
                             sftp_config["SFTP_REMOTE_DIRECTORY"], file_name)
                         local_file_path = os.path.join(
@@ -200,31 +217,36 @@ def download_many(sftp_config, local_directory, download_queue, remote_ls_file, 
                         pbar.update(1)
                         count += 1
                     except KeyboardInterrupt:
-                        print("\nDownload interrupted by the user. Cleaning up...")
+                        logging.warning(
+                            "\nDownload interrupted by the user. Cleaning up...")
                         break
 
                     except Exception as e:
-                        print(f"Error downloading file {file_name}: {e}")
+                        logging.error(
+                            f"Error downloading file {file_name}: {e}")
 
-    print(f"Updating queue file {download_queue}")
+    logging.info(f"Updating queue file {download_queue}")
     # Update download queue
     res = compare_remote_listing_to_already_downloaded(
         remote_ls_file, local_directory, download_queue)
 
     print(
-        f"Downloaded:\t{res['already_downloaded_size']:.0f}MB\t{res['already_downloaded_count']}")
+        f"Downloaded: {res['already_downloaded_size']:>12.0f} MB\t{res['already_downloaded_count']:>5} files")
     print(
-        f"Remaining: \t{res['to_download_size']:.0f}MB\t{res['to_download_count']}")
+        f"Remaining:  {res['to_download_size']:>12.0f} MB\t{res['to_download_count']:>5} files")
 
     if count < len(files_to_download):
-        print(f"Downloaded {count} files before interruption.")
+        logging.info(f"Downloaded {count} files before interruption.")
 
     else:
-        print("All files downloaded successfully")
+        logging.info("All files downloaded successfully")
 
 
 if __name__ == '__main__':
+    logging.basicConfig(filename='lidar_downloader.log',  level=logging.INFO,
+                        format='[%(asctime)s] %(levelname)s: %(message)s', datefmt='%y%m%d %H:%M')
     compare_remote_listing_to_already_downloaded(
         'ls.txt', '/mnt/d/lidarnn_raw/', 'todo.txt')
     sftp_config = sftp_cfg('sftpconfig.json')
-    download_many(sftp_config, '/mnt/d/lidarnn_raw/', 'todo.txt', 'ls.txt', 10)
+    download_many(sftp_config, '/mnt/d/lidarnn_raw/',
+                  'todo.txt', 'ls.txt', 100)
