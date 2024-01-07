@@ -155,7 +155,7 @@ def compare_remote_listing_to_already_downloaded(remote_ls_file, local_directory
     }
 
 
-def download_many(sftp_config, local_directory, download_queue, remote_ls_file, N=None):
+def download_many(sftp_config, local_directory, download_queue, remote_ls_file=None, N=None, tqdm_disable=False):
     '''
     Reads the contents of `download_queue` to establish a list of file names to download, and 
     proceeds to download each one
@@ -172,8 +172,11 @@ def download_many(sftp_config, local_directory, download_queue, remote_ls_file, 
     '''
 
     # read in list of files we need to download
-    with open(download_queue, 'r') as f:
-        files_to_download = [line.strip() for line in f]
+    if isinstance(download_queue, list):
+        files_to_download = download_queue
+    else:
+        with open(download_queue, 'r') as f:
+            files_to_download = [line.strip() for line in f]
 
     if N is not None:
         files_to_download = files_to_download[:N]
@@ -191,6 +194,7 @@ def download_many(sftp_config, local_directory, download_queue, remote_ls_file, 
                   unit='file',
                   desc="Downloading files",
                   position=0,
+                  disable=tqdm_disable,
                   bar_format=TQDM_FMT) as pbar:
             for file_name in files_to_download:
                 with tqdm(total=100,
@@ -198,6 +202,7 @@ def download_many(sftp_config, local_directory, download_queue, remote_ls_file, 
                           desc=f"{file_name}",
                           position=1,
                           leave=False,
+                          disable=tqdm_disable,
                           bar_format=TQDM_FMT) as pbar_inner:
                     try:
 
@@ -226,14 +231,16 @@ def download_many(sftp_config, local_directory, download_queue, remote_ls_file, 
                             f"Error downloading file {file_name}: {e}")
 
     logging.info(f"Updating queue file {download_queue}")
-    # Update download queue
-    res = compare_remote_listing_to_already_downloaded(
-        remote_ls_file, local_directory, download_queue)
 
-    print(
-        f"Downloaded: {res['already_downloaded_size']:>12.0f} MB\t{res['already_downloaded_count']:>5} files")
-    print(
-        f"Remaining:  {res['to_download_size']:>12.0f} MB\t{res['to_download_count']:>5} files")
+    if remote_ls_file is not None:
+        # Update download queue
+        res = compare_remote_listing_to_already_downloaded(
+            remote_ls_file, local_directory, download_queue)
+
+        print(
+            f"Downloaded: {res['already_downloaded_size']:>12.0f} MB\t{res['already_downloaded_count']:>5} files")
+        print(
+            f"Remaining:  {res['to_download_size']:>12.0f} MB\t{res['to_download_count']:>5} files")
 
     if count < len(files_to_download):
         logging.info(f"Downloaded {count} files before interruption.")
@@ -249,4 +256,4 @@ if __name__ == '__main__':
         'ls.txt', '/mnt/d/lidarnn_raw/', 'todo.txt')
     sftp_config = sftp_cfg('sftpconfig.json')
     download_many(sftp_config, '/mnt/d/lidarnn_raw/',
-                  'todo.txt', 'ls.txt', 100)
+                  'todo.txt', 'ls.txt', 1)
