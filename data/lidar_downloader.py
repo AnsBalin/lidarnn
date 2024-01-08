@@ -155,7 +155,7 @@ def compare_remote_listing_to_already_downloaded(remote_ls_file, local_directory
     }
 
 
-def download_many(sftp_config, local_directory, download_queue, remote_ls_file=None, N=None, tqdm_disable=False):
+def download_many(sftp_config, local_directory, download_queue, logger, remote_ls_file=None, N=None, tqdm_disable=False):
     '''
     Reads the contents of `download_queue` to establish a list of file names to download, and 
     proceeds to download each one
@@ -181,14 +181,14 @@ def download_many(sftp_config, local_directory, download_queue, remote_ls_file=N
     if N is not None:
         files_to_download = files_to_download[:N]
 
-    logging.info(f"Downloading {N} {len(files_to_download)} files.")
+    logger.info(f"Downloading {N} {len(files_to_download)} files.")
     count = 0
 
     with SFTPConnection(host=sftp_config["SFTP_HOST"],
                         username=sftp_config["SFTP_USER"],
                         password=sftp_config["SFTP_PASSWORD"],
                         ) as sftp:
-        logging.info(f"[CONNECTED] to host {sftp_config['SFTP_HOST']}")
+        logger.info(f"[CONNECTED] to host {sftp_config['SFTP_HOST']}")
 
         with tqdm(total=len(files_to_download),
                   unit='file',
@@ -206,7 +206,7 @@ def download_many(sftp_config, local_directory, download_queue, remote_ls_file=N
                           bar_format=TQDM_FMT) as pbar_inner:
                     try:
 
-                        logging.info(f"[DOWNLOADING] {file_name}")
+                        logger.info(f"[DOWNLOADING] {file_name}")
                         remote_file_path = os.path.join(
                             sftp_config["SFTP_REMOTE_DIRECTORY"], file_name)
                         local_file_path = os.path.join(
@@ -222,15 +222,15 @@ def download_many(sftp_config, local_directory, download_queue, remote_ls_file=N
                         pbar.update(1)
                         count += 1
                     except KeyboardInterrupt:
-                        logging.warning(
+                        logger.warning(
                             "\nDownload interrupted by the user. Cleaning up...")
                         break
 
                     except Exception as e:
-                        logging.error(
+                        logger.error(
                             f"Error downloading file {file_name}: {e}")
 
-    logging.info(f"Updating queue file {download_queue}")
+    logger.info(f"Updating queue file {download_queue}")
 
     if remote_ls_file is not None:
         # Update download queue
@@ -243,17 +243,18 @@ def download_many(sftp_config, local_directory, download_queue, remote_ls_file=N
             f"Remaining:  {res['to_download_size']:>12.0f} MB\t{res['to_download_count']:>5} files")
 
     if count < len(files_to_download):
-        logging.info(f"Downloaded {count} files before interruption.")
+        logger.info(f"Downloaded {count} files before interruption.")
 
     else:
-        logging.info("All files downloaded successfully")
+        logger.info("All files downloaded successfully")
 
 
 if __name__ == '__main__':
     logging.basicConfig(filename='lidar_downloader.log',  level=logging.INFO,
                         format='[%(asctime)s] %(levelname)s: %(message)s', datefmt='%y%m%d %H:%M')
+    logger = logging.getLogger()
     compare_remote_listing_to_already_downloaded(
         'ls.txt', '/mnt/d/lidarnn_raw/', 'todo.txt')
     sftp_config = sftp_cfg('sftpconfig.json')
     download_many(sftp_config, '/mnt/d/lidarnn_raw/',
-                  'todo.txt', 'ls.txt', 1)
+                  'todo.txt', logger, 'ls.txt', 2)
