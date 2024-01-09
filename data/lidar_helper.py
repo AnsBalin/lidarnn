@@ -1,10 +1,10 @@
+import logging
 import zipfile
 import os
 import rasterio
 import numpy as np
 import matplotlib.pyplot as plt
 import geopandas as gpd
-import earthpy.spatial as es
 from rasterio.features import geometry_mask
 from functools import lru_cache
 import logging
@@ -59,30 +59,38 @@ def get_monuments():
     return _get_shape('monuments')
 
 
-def unzip_files_in_directory(folder_path=None):
+def unzip_files_in_directory(folder_path=None, zip_files=None, logger=logging):
     '''
     Unzips all zip files in path matching DTM_PREFIX. 
     Only extracts files if target path does not exist.
     '''
 
-    if folder_path is not None:
+    cwd = os.getcwd()
+
+    try:
         os.chdir(folder_path)
 
-    files = os.listdir(folder_path)
+        if zip_files is None:
+            files = os.listdir(folder_path)
 
-    zip_files = [f for f in files
-                 if f.startswith(DTM_PREFIX) and f.endswith('.zip')]
+            zip_files = [f for f in files
+                         if f.startswith(DTM_PREFIX) and f.endswith('.zip')]
 
-    for zip_file in zip_files:
-        dir_name = zip_file.rsplit('.', 1)[0]  # Remove the .zip extension
+        for zip_file in zip_files:
+            dir_name = zip_file.rsplit('.', 1)[0]  # Remove the .zip extension
 
-        if not os.path.exists(dir_name):
-            os.makedirs(dir_name)
+            if not os.path.exists(dir_name):
+                logger.info(f"Unzipping {zip_file} into {dir_name}")
+                os.makedirs(dir_name)
 
-            with zipfile.ZipFile(zip_file, 'r') as zip_ref:
-                zip_ref.extractall(dir_name)
+                with zipfile.ZipFile(zip_file, 'r') as zip_ref:
+                    zip_ref.extractall(dir_name)
+                logger.info(f"Unzipped {zip_file}")
+            else:
+                logger.info(f"{dir_name} already exists. Skipping...")
 
-            print(f'Extracted {zip_file} into {dir_name}/')
+    finally:
+        os.chdir(cwd)
 
 
 def hillshade(array, azimuth=315, angle_altitude=45):
@@ -233,16 +241,9 @@ if __name__ == '__main__':
 
     # Look for zip files and extract if not already extracted
     print(f'Unzipping files in directory {DTM_RAW_PATH}')
-    cwd = os.getcwd()
-    try:
-        os.chdir(DTM_RAW_PATH)
-        unzip_files_in_directory()
+    unzip_files_in_directory()
 
-        dtm_dirs = [f.path for f in os.scandir() if f.is_dir()]
-
-    finally:
-        os.chdir(cwd)
-
+    dtm_dirs = [f.path for f in os.scandir() if f.is_dir()]
     data_dirs = os.listdir(DATA_PATH)
 
     for dtm_dir in (pbar := tqdm(dtm_dirs)):
