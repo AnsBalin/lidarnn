@@ -20,7 +20,6 @@ class SFTPConnection(object):
     '''
 
     def __init__(self, host, username, password, port=22):
-
         self._sftp_live = False
         self._sftp = None
         self._tconnect = {
@@ -35,6 +34,8 @@ class SFTPConnection(object):
             raise ConnectionException(host, port)
 
         self._transport.connect(**self._tconnect)
+
+        logging.getLogger("paramiko").setLevel(logging.WARNING)
 
     def _sftp_connect(self):
         '''Cached connection'''
@@ -125,23 +126,34 @@ def list_files(sftp_config, remote_ls_file=""):
                 logging.info(f"{attr.filename}\t{attr.st_size}\n")
 
 
-def compare_remote_listing_to_already_downloaded(remote_ls_file, local_directory, download_queue):
+def read_ls_file(remote_ls_file):
+    with open(remote_ls_file, 'r') as f:
+        remote_files = {line.split('\t')[0].rsplit('.', 1)[0]: int(
+            line.split('\t')[1]) for line in f}
+
+    return remote_files
+
+
+def compare_remote_listing_to_already_downloaded(remote_ls_file, local_directory, download_queue=None):
     '''Compares the contents of remote_ls_file to the contents of local_directory, and enumerates a list
     of all files yet to be downloaded, and writes this list to download_queue    
     '''
     logging.info(
         f"[COMPARE] remote listing file to already downloaded zip files.")
-    local_files = set(os.listdir(local_directory))
 
-    with open(remote_ls_file, 'r') as f:
-        remote_files = {line.split('\t')[0]: int(
-            line.split('\t')[1]) for line in f}
+    local_files = os.listdir(local_directory)
+    local_files = set([f.split('.')[0] for f in local_files])
+
+    remote_files = read_ls_file(remote_ls_file)
 
     # to_download = remote_files - local_files
     to_download = {file: size for (
-        file, size) in remote_files.items() if file not in local_files}
+        file, size) in remote_files.items() if file.split('.')[0] not in local_files}
     already_downloaded = {file: size for (
-        file, size) in remote_files.items() if file in local_files}
+        file, size) in remote_files.items() if file.split('.')[0] in local_files}
+
+    if download_queue is None:
+        return list(already_downloaded.keys()), list(to_download.keys())
 
     with open(download_queue, 'w') as f:
         for file in to_download.keys():
@@ -205,6 +217,10 @@ def download_many(sftp_config, local_directory, download_queue, logger, remote_l
                           disable=tqdm_disable,
                           bar_format=TQDM_FMT) as pbar_inner:
                     try:
+
+                        # make sure we are downloading a zip
+                        if not file_name.endswith('.zip'):
+                            file_name = file_name + '.zip'
 
                         logger.info(f"[DOWNLOADING] {file_name}")
                         remote_file_path = os.path.join(

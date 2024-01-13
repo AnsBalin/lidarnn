@@ -14,6 +14,8 @@ import json
 from shapely import Polygon
 from tqdm import tqdm
 
+import cProfile
+
 # Globals - Move to config later
 DTM_PREFIX = 'LIDAR-DTM-1m-2022'
 DTM_SIZE = 5000
@@ -23,8 +25,8 @@ DTM_RAW_PATH = '/mnt/d/lidarnn_raw'
 DATA_PATH = '/mnt/d/lidarnn'
 
 # Relative paths (relative to lidarnn/data/)
-GB_SHAPEFILE_PATH = 'gb/infuse_gb_2011.shp'
-MONUMENTS_SHAPEFILE_PATH = 'monuments/Scheduled_Monuments.shp'
+GB_SHAPEFILE_PATH = './data/gb/infuse_gb_2011.shp'
+MONUMENTS_SHAPEFILE_PATH = './data/monuments/Scheduled_Monuments.shp'
 # Relative paths (relative to DATA_PATH/{tile_ref} )
 FEATURES_PATH = 'features'
 MASKS_PATH = 'masks'
@@ -59,35 +61,66 @@ def get_monuments():
     return _get_shape('monuments')
 
 
-def unzip_files_in_directory(folder_path=None, zip_files=None, logger=logging):
-    """
-    Unzips all zip files in path matching DTM_PREFIX. 
-    Only extracts files if target path does not exist.
-    """
+def files_to_unzip(folder_path):
+    """Scans folder path and returns list of DTM directories (unzipped) and DTM .zip files"""
 
     cwd = os.getcwd()
 
     try:
         os.chdir(folder_path)
+        files = os.listdir(folder_path)
 
-        if zip_files is None:
-            files = os.listdir(folder_path)
+        zip_files = [f for f in files
+                     if f.startswith(DTM_PREFIX) and f.endswith('.zip')]
 
-            zip_files = [f for f in files
-                         if f.startswith(DTM_PREFIX) and f.endswith('.zip')]
+        # remove .zip extension
+        zip_files = [z.rsplit('.', 1)[0] for z in zip_files]
+
+        dirs = [f.name for f in os.scandir()
+                if f.name.startswith(DTM_PREFIX) and f.is_dir()]
+
+    finally:
+        os.chdir(cwd)
+
+    return dirs, zip_files
+
+
+def unzip_files_in_directory(folder_path=None, zip_files=None, logger=logging, delete_zip=False):
+    """
+    Unzips all zip files in path matching DTM_PREFIX. 
+    Only extracts files if target path does not exist.
+    """
+
+    if zip_files is None:
+        _, zip_files = files_to_unzip(folder_path)
+
+    cwd = os.getcwd()
+    try:
+        os.chdir(folder_path)
 
         for zip_file in zip_files:
-            dir_name = zip_file.rsplit('.', 1)[0]  # Remove the .zip extension
+            # we now remove zip extension earlier
+            # dir_name = zip_file.rsplit('.', 1)[0]  # Remove the .zip extension
+            dir_name = zip_file
 
             if not os.path.exists(dir_name):
                 logger.info(f"Unzipping {zip_file} into {dir_name}")
                 os.makedirs(dir_name)
 
-                with zipfile.ZipFile(zip_file, 'r') as zip_ref:
+                with zipfile.ZipFile(zip_file + '.zip', 'r') as zip_ref:
                     zip_ref.extractall(dir_name)
                 logger.info(f"Unzipped {zip_file}")
+
+                if delete_zip:
+                    os.remove(zip_file + '.zip')
+
             else:
                 logger.info(f"{dir_name} already exists. Skipping...")
+
+    except Exception as e:
+        logger.error(f"{zip_file}: {e}")
+        if os.path.exists(dir_name):
+            os.removedirs(dir_name)
 
     finally:
         os.chdir(cwd)
@@ -157,8 +190,33 @@ def hill_stack(elevation, channels=1, altitude=10):
     return np.stack(hill_stack, axis=2)
 
 
-def create_features_and_masks(tile_ref, raw_data_path, L=256, channels=3):
-    elevation, transform, tile_geometry = get_tile(tile_ref, raw_data_path)
+def files_to_process(data_raw_path, data_out_path, output_image_size):
+
+    n_subtiles = _n_subtiles(DTM_SIZE, output_image_size) ** 2
+
+    done = []
+
+    # The unzipped data directories eg ['LIDAR-DTM-1m-2022-NZ09se']
+    full_todo = [f.name for f in os.scandir(data_raw_path) if f.is_dir()]
+
+    # The preprocessed data directories eg ['LIDAR-DTM-1m-2022-NZ09se']
+    png_dirs = [f.name for f in os.scandir(data_out_path) if f.is_dir()]
+
+    # Check the contents of these directories is sensible. They should have
+    # n_subtiles subdirectories
+    for png_dir in png_dirs:
+        subdirectories = [subd.name for subd in os.scandir(
+            os.path.join(data_out_path, png_dir))]
+        if len(subdirectories) == n_subtiles:
+            done.append(png_dir)
+
+    todo = [d for d in full_todo if d not in done]
+
+    return done, todo
+
+
+def create_features_and_masks(tile_ref, data_raw_path, L=256, channels=3):
+    elevation, transform, tile_geometry = get_tile(tile_ref, data_raw_path)
     gb = get_gb()
     monuments = get_monuments()
     hillstack = hill_stack(elevation, channels, 10)
@@ -235,7 +293,7 @@ def create_features_and_masks(tile_ref, raw_data_path, L=256, channels=3):
     return data
 
 
-def process_dtm(dtm_dirs, raw_data_path, out_data_path, logger, output_image_size=256):
+def process_dtm(dtm_dirs, data_raw_path, data_out_path, logger, output_image_size=256):
     """Perform LIDAR image processing steps on a list of unzipped directories.
 
     Args:
@@ -246,118 +304,38 @@ def process_dtm(dtm_dirs, raw_data_path, out_data_path, logger, output_image_siz
         None
     """
 
-    cwd = os.getcwd()
-    try:
-        os.chdir(raw_data_path)
-        dtm_dirs = [f.path for f in os.scandir() if f.is_dir()
-                    and any([d in f.path for d in dtm_dirs])]
-    finally:
-        os.chdir(cwd)
-
-    data_dirs = os.listdir(out_data_path)
     for dtm_dir in dtm_dirs:
-
-        n_subtiles = _n_subtiles(DTM_SIZE, output_image_size)
 
         # dtm_dir for instance './LIDAR-DTM-1m-2022-SE32ne'
         # Tile Ref is SE32ne
         tile_ref = dtm_dir.split('-')[-1]
 
-        existing_dirs = [f for f in data_dirs if f.startswith(tile_ref)]
+        logger.info(f"Creating features and masks for {tile_ref}")
+        subtiles = create_features_and_masks(
+            tile_ref, data_raw_path, L=output_image_size, channels=3)
 
-        expected = set(['features.npy', 'features.png',
-                        'mask.npy', 'mask.png', 'metadata.json'])
+        for subtile in subtiles:
+            features = subtile['hillstack']
+            mask = subtile['monuments']
+            metadata = subtile['metadata']
+            id_str = metadata['id']
+            path = os.path.join(data_out_path, dtm_dir, id_str)
+            if not os.path.exists(path):
+                os.makedirs(path)
 
-        def unexpected_files(dir):
-            dir_files = set(os.listdir(os.path.join(raw_data_path, dir)))
-            return dir_files != expected
+            img_features = Image.fromarray(features.astype(np.uint8))
+            img_mask = Image.fromarray(mask.astype(np.uint8))
 
-        subtiles_not_done = list(map(unexpected_files, existing_dirs))
+            img_features.save(f'{path}/features.png')
+            img_mask.save(f'{path}/mask.png')
 
-        if len(existing_dirs) < n_subtiles or any(subtiles_not_done):
-            logger.info(f"Creating features and masks for {tile_ref}")
-            subtiles = create_features_and_masks(
-                tile_ref, raw_data_path, L=output_image_size, channels=3)
-
-            for subtile in subtiles:
-                features = subtile['hillstack']
-                mask = subtile['monuments']
-                metadata = subtile['metadata']
-                id_str = metadata['id']
-                path = os.path.join(out_data_path, id_str)
-                if not os.path.exists(path):
-                    os.makedirs(path)
-                # np.save(f'{path}/features.npy', features)
-                # np.save(f'{path}/mask.npy', mask)
-
-                img_features = Image.fromarray(features.astype(np.uint8))
-                img_mask = Image.fromarray(mask.astype(np.uint8))
-
-                img_features.save(f'{path}/features.png')
-                img_mask.save(f'{path}/mask.png')
-
-                with open(f'{path}/metadata.json', 'w') as fp:
-                    json.dump(metadata, fp, default=lambda _: '<n/a>')
+            with open(f'{path}/metadata.json', 'w') as fp:
+                json.dump(metadata, fp, default=lambda _: '<n/a>')
 
 
 if __name__ == '__main__':
 
-    # logging.basicConfig(format='%(asctime)s: %(message)s', datefmt='%d-%b-%y %H:%M:%S')
-
-    # Look for zip files and extract if not already extracted
-    print(f'Unzipping files in directory {DTM_RAW_PATH}')
-    unzip_files_in_directory()
-
-    dtm_dirs = [f.path for f in os.scandir() if f.is_dir()]
-    data_dirs = os.listdir(DATA_PATH)
-
-    for dtm_dir in (pbar := tqdm(dtm_dirs)):
-
-        # output image size
-        L = 256
-        n_subtiles = _n_subtiles(DTM_SIZE, L)
-
-        # dtm_dir is like './LIDAR-DTM-1m-2022-SW32ne'
-        tile_ref = dtm_dir.split('-')[-1]
-
-        existing_dirs = [f for f in data_dirs if f.startswith(tile_ref)]
-
-        expected = set(['features.npy', 'features.png',
-                       'mask.npy', 'mask.png', 'metadata.json'])
-
-        def unexpected_files(dir):
-            dir_files = set(os.listdir(os.path.join(DATA_PATH, dir)))
-            return dir_files != expected
-
-        subtiles_not_done = list(map(unexpected_files, existing_dirs))
-
-        if len(existing_dirs) < n_subtiles or any(subtiles_not_done):
-            pbar.set_description(f'Creating features and masks for {tile_ref}')
-
-            subtiles = create_features_and_masks(tile_ref, L=L, channels=3)
-
-            for subtile in subtiles:
-
-                features = subtile['hillstack']
-                mask = subtile['monuments']
-                metadata = subtile['metadata']
-                id_str = metadata['id']
-                pbar.set_description(
-                    f'Processing subtile {id_str}')
-                path = os.path.join(DATA_PATH, id_str)
-                if not os.path.exists(path):
-                    os.makedirs(path)
-                np.save(f'{path}/features.npy', features)
-                np.save(f'{path}/mask.npy', mask)
-
-                img_features = Image.fromarray(features.astype(np.uint8))
-                img_mask = Image.fromarray(mask.astype(np.uint8))
-
-                img_features.save(f'{path}/features.png')
-                img_mask.save(f'{path}/mask.png')
-
-                with open(f'{path}/metadata.json', 'w') as fp:
-                    json.dump(metadata, fp, default=lambda o: '<n/a>')
-        else:
-
-            pbar.set_description(f'Done {tile_ref}')
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger()
+    cProfile.run(
+        "process_dtm(['LIDAR-DTM-1m-2022-NZ09se','LIDAR-DTM-1m-2022-NZ09nw'],'/mnt/d/lidarnn_raw_new', '/mnt/d/lidarnn', logger, 256)")
