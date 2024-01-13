@@ -37,7 +37,7 @@ def _n_subtiles(M, L):
 
 @lru_cache(maxsize=None)
 def _get_shape(id):
-    '''Wrapper for accessing shapes from config paths'''
+    """Wrapper for accessing shapes from config paths"""
     if id == 'gb':
         path = GB_SHAPEFILE_PATH
     elif id == 'monuments':
@@ -47,23 +47,23 @@ def _get_shape(id):
 
 
 def get_gb():
-    '''Returns a gpd table with one element containing the geometry of the GB coastline'''
+    """Returns a gpd table with one element containing the geometry of the GB coastline"""
     return _get_shape('gb')
 
 
 def get_monuments():
-    '''
+    """
     Returns a gpd table for the Historic England Scheduled Monuments dataset. 
     Each row contains geometry + metadata of a single monument.
-    '''
+    """
     return _get_shape('monuments')
 
 
 def unzip_files_in_directory(folder_path=None, zip_files=None, logger=logging):
-    '''
+    """
     Unzips all zip files in path matching DTM_PREFIX. 
     Only extracts files if target path does not exist.
-    '''
+    """
 
     cwd = os.getcwd()
 
@@ -94,13 +94,13 @@ def unzip_files_in_directory(folder_path=None, zip_files=None, logger=logging):
 
 
 def hillshade(array, azimuth=315, angle_altitude=45):
-    '''
+    """
     Creates a hillshade of a given numpy array. This is the same as the hillshade 
     from earthpy 0.9.4.
 
     Original documentation:
     https://earthpy.readthedocs.io/en/latest/gallery_vignettes/plot_dem_hillshade.html?highlight=hillshade
-    '''
+    """
     azimuth = 360.0 - azimuth
     x, y = np.gradient(array)
     slope = np.pi/2. - np.arctan(np.sqrt(x*x + y*y))
@@ -115,7 +115,7 @@ def hillshade(array, azimuth=315, angle_altitude=45):
 
 
 def get_tile(tile_ref, path=DTM_RAW_PATH):
-    '''Reads DTM raster from disk and returns elevation map and affine transform.'''
+    """Reads DTM raster from disk and returns elevation map and affine transform."""
 
     file = f'{path}/{DTM_PREFIX}-{tile_ref}/{tile_ref}_DTM_1m.tif'
     shapefile = f'{path}/{DTM_PREFIX}-{tile_ref}/index/{tile_ref}_DTM_1m.shp'
@@ -130,7 +130,7 @@ def get_tile(tile_ref, path=DTM_RAW_PATH):
 
 
 def hill_stack(elevation, channels=1, altitude=10):
-    '''
+    """
     Returns an n-channel array representing a stack of hillshades. 
 
     Output shape will be (elevation.shape[0], elevation.shape[1], channels)
@@ -142,7 +142,7 @@ def hill_stack(elevation, channels=1, altitude=10):
     Channel n=0 will always have azimuth 0.
     If channels == 2, channel n=1 will have azimuth pi/2.
     If channels > 2, then the nth hillshade will have an azimuth 2*pi*n/channels.
-    '''
+    """
 
     if channels < 1:
         raise ValueError('Number of channels in hillshade stack must be > 0.')
@@ -157,8 +157,8 @@ def hill_stack(elevation, channels=1, altitude=10):
     return np.stack(hill_stack, axis=2)
 
 
-def create_features_and_masks(tile_ref, L=256, channels=3):
-    elevation, transform, tile_geometry = get_tile(tile_ref)
+def create_features_and_masks(tile_ref, raw_data_path, L=256, channels=3):
+    elevation, transform, tile_geometry = get_tile(tile_ref, raw_data_path)
     gb = get_gb()
     monuments = get_monuments()
     hillstack = hill_stack(elevation, channels, 10)
@@ -233,6 +233,71 @@ def create_features_and_masks(tile_ref, L=256, channels=3):
                     }})
 
     return data
+
+
+def process_dtm(dtm_dirs, raw_data_path, out_data_path, logger, output_image_size=256):
+    """Perform LIDAR image processing steps on a list of unzipped directories.
+
+    Args:
+        dtm_dirs: A list of directories, for example ['LIDAR-DTM-1m-2022-NT60se']
+        logger: logger object implementing .info(), .warning() etc.
+
+    Returns:
+        None
+    """
+
+    cwd = os.getcwd()
+    try:
+        os.chdir(raw_data_path)
+        dtm_dirs = [f.path for f in os.scandir() if f.is_dir()
+                    and any([d in f.path for d in dtm_dirs])]
+    finally:
+        os.chdir(cwd)
+
+    data_dirs = os.listdir(out_data_path)
+    for dtm_dir in dtm_dirs:
+
+        n_subtiles = _n_subtiles(DTM_SIZE, output_image_size)
+
+        # dtm_dir for instance './LIDAR-DTM-1m-2022-SE32ne'
+        # Tile Ref is SE32ne
+        tile_ref = dtm_dir.split('-')[-1]
+
+        existing_dirs = [f for f in data_dirs if f.startswith(tile_ref)]
+
+        expected = set(['features.npy', 'features.png',
+                        'mask.npy', 'mask.png', 'metadata.json'])
+
+        def unexpected_files(dir):
+            dir_files = set(os.listdir(os.path.join(raw_data_path, dir)))
+            return dir_files != expected
+
+        subtiles_not_done = list(map(unexpected_files, existing_dirs))
+
+        if len(existing_dirs) < n_subtiles or any(subtiles_not_done):
+            logger.info(f"Creating features and masks for {tile_ref}")
+            subtiles = create_features_and_masks(
+                tile_ref, raw_data_path, L=output_image_size, channels=3)
+
+            for subtile in subtiles:
+                features = subtile['hillstack']
+                mask = subtile['monuments']
+                metadata = subtile['metadata']
+                id_str = metadata['id']
+                path = os.path.join(out_data_path, id_str)
+                if not os.path.exists(path):
+                    os.makedirs(path)
+                # np.save(f'{path}/features.npy', features)
+                # np.save(f'{path}/mask.npy', mask)
+
+                img_features = Image.fromarray(features.astype(np.uint8))
+                img_mask = Image.fromarray(mask.astype(np.uint8))
+
+                img_features.save(f'{path}/features.png')
+                img_mask.save(f'{path}/mask.png')
+
+                with open(f'{path}/metadata.json', 'w') as fp:
+                    json.dump(metadata, fp, default=lambda _: '<n/a>')
 
 
 if __name__ == '__main__':
