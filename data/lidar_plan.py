@@ -12,9 +12,7 @@ LOG_EOF = 'EOF'
 
 
 class QueueLogger:
-    '''
-    Not really a logger, but worker processes need not know this!
-    '''
+    """Mock interface for logger. Puts the thing to be logged in a queue."""
 
     def __init__(self, queue):
         self.queue = queue
@@ -37,9 +35,7 @@ class QueueLogger:
 
 
 def handle_log_entry(log_entry):
-    '''
-    unpack the log entry put by the queue logger and actually log it
-    '''
+    """Unpack the log entry put by the queue logger and actually log it."""
     level = log_entry['level']
     message = log_entry['message']
 
@@ -58,19 +54,17 @@ def handle_log_entry(log_entry):
 
 
 class Task:
-    '''
-    Base class for Pipeline task.
-    '''
+    """Base class for Pipeline task."""
 
     def __init__(self, task_name):
         self.task_name = "BaseTask"
 
     def handle_queue(self, queue_in, queue_out, logger):
-        '''
+        """
         Performs a task on items from an upstream queue, until 
         sentinel value task==None is reached. Once the task 
         is complete it is added to the downstream queue.
-        '''
+        """
         logger.bind(self.task_name)
         logger.info(f"Handling queue")
 
@@ -88,16 +82,13 @@ class Task:
                 logger.info(f"{LOG_EOF}")
                 break
 
-    def perform_task(task, log):
-        '''
-        Actual task to perform to be implemented by derived classes
-        '''
+    def perform_task(task, logger):
+        """Actual task to perform to be implemented by derived classes"""
+        pass
 
 
 class DownloadTask(Task):
-    '''
-    Implements sftp download of LIDAR data
-    '''
+    """Implements sftp download of LIDAR data."""
 
     def __init__(self, sftp_config, local_directory):
         self.task_name = "Downloader"
@@ -111,9 +102,7 @@ class DownloadTask(Task):
 
 
 class UnzipTask(Task):
-    '''
-    unzip LIDAR data + maybe do some checks 
-    '''
+    """Implements task of unzipping the lidar data"""
 
     def __init__(self, local_directory):
         self.local_directory = local_directory
@@ -125,11 +114,11 @@ class UnzipTask(Task):
 
 
 class DataPipeline:
-    '''
-    Pipeline manager responsible for:
+    """Pipeline manager.
+    Responsible for:
         1) constructing task queues based on expected state of data/ 
         2) dispatching tasks to handlers concurrently
-    '''
+    """
 
     def __init__(self, data_path):
         sftp_config = lidar_downloader.sftp_cfg('sftpconfig.json')
