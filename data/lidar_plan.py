@@ -7,12 +7,14 @@ from functools import reduce
 import operator
 from tqdm import tqdm
 import re
+import signal
 
 import lidar_downloader
 import lidar_helper
 
 LOG_EOF = 'EOF'
 LOG_TASK_COMPLETE = 'Completed Task'
+LOG_TASK_FAIL = 'Failed Task'
 
 
 class QueueLogger:
@@ -68,6 +70,7 @@ class Task:
         self.pool_type = kwargs['pool_type']
         self.max_workers = kwargs['max_workers']
         self.fan_out = kwargs['fan_out']
+        self.timeout = kwargs['timeout']
 
     def handle_queue(self, id, queue_in, queue_out, logger):
         """
@@ -79,27 +82,41 @@ class Task:
         logger.bind(self.task_name, id)
         logger.info(f"Handling queue")
 
+        class TaskTimeOut(Exception):
+            pass
+
+        def handle_timeout(signum, frame):
+            raise TaskTimeOut("timeout")
+        signal.signal(signal.SIGALRM, handle_timeout)
+
         while True:
-            task = queue_in.get()
+            try:
+                task = queue_in.get()
 
-            logger.info(f"Got Task {task}")
-            if task is not None:
-                try:
+                logger.info(f"Got Task {task}")
+                if task is not None:
+                    signal.alarm(self.timeout)
                     self.perform_task(task, logger)
+                    signal.alarm(0)
+
                     logger.info(f"{LOG_TASK_COMPLETE} {task}")
-                except Exception as e:
-                    logger.error(e)
 
-            queue_in.task_done()
+            except (TaskTimeOut, Exception) as e:
+                logger.error(f"{LOG_TASK_FAIL} {task}: {e}")
 
-            if task is None:
-                # Sentinel value for actual logger
-                logger.info(f"{LOG_EOF}")
-                for _ in range(self.fan_out):
-                    queue_out.put(None)
-                break
+            else:
+                # Only send this downstream if it succeeded
+                queue_out.put(task)
 
-            queue_out.put(task)
+            finally:
+                queue_in.task_done()
+
+                if task is None:
+                    # Sentinel value for actual logger
+                    logger.info(f"{LOG_EOF}")
+                    for _ in range(self.fan_out):
+                        queue_out.put(None)
+                    break
 
     def perform_task(self, task, logger):
         """Actual task to perform to be implemented by derived classes"""
@@ -212,12 +229,14 @@ class DataPipeline:
             remote_ls_file,
             max_workers=1,
             fan_out=1,
+            timeout=60,
             pool_type='thread')
 
         self.unzipper = UnzipTask(
             data_raw_path,
             max_workers=1,
-            fan_out=4,
+            fan_out=2,
+            timeout=10,
             pool_type='process')
 
         self.preprocessor = PreprocessTask(
@@ -225,8 +244,9 @@ class DataPipeline:
             data_out_path,
             shape_path,
             output_image_size=5000,
-            max_workers=4,
+            max_workers=2,
             fan_out=1,
+            timeout=90,
             pool_type='process')
 
         self.tasks = [self.downloader, self.unzipper, self.preprocessor]
@@ -335,9 +355,9 @@ class DataPipeline:
             for task in todos_for_tasks[2][:N]:
                 q_preprocess.put([task])
 
-            q_download_size = q_download.size()
-            q_unzip_size = q_unzip.size()
-            q_preprocess_size = q_preprocess.size()
+            q_download_size = q_download.qsize()
+            q_unzip_size = q_unzip.qsize()
+            q_preprocess_size = q_preprocess.qsize()
             q_download.put(None)
 
             download_pool = concurrent.futures.ThreadPoolExecutor(
@@ -417,6 +437,6 @@ if __name__ == '__main__':
         remote_ls_file='ls.txt',
         shape_path='/mnt/d/lidarnn_shapes')
 
-    pipeline.run(N=10)
+    pipeline.run(N=200)
 
     logging.info("=================Ending...===========================")

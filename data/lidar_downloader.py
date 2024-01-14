@@ -270,7 +270,7 @@ if __name__ == '__main__':
                         format='[%(asctime)s] %(levelname)s: %(message)s', datefmt='%y%m%d %H:%M')
     logger = logging.getLogger()
     compare_remote_listing_to_already_downloaded(
-        'ls.txt', '/mnt/d/lidarnn_raw/', 'todo.txt')
+        'ls.txt', '/mnt/d/lidarnn_raw_new/', 'todo.txt')
     sftp_config = sftp_cfg('sftpconfig.json')
     download_many(sftp_config, '/mnt/d/lidarnn_raw/',
                   'todo.txt', logger, 'ls.txt', 2)
