@@ -18,3 +18,4 @@ data/lidar
 # logs 
 *.txt
 *.log
+*.csv

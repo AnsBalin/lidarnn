@@ -25,8 +25,8 @@ DTM_RAW_PATH = '/mnt/d/lidarnn_raw'
 DATA_PATH = '/mnt/d/lidarnn'
 
 # Relative paths (relative to lidarnn/data/)
-GB_SHAPEFILE_PATH = './data/gb/infuse_gb_2011.shp'
-MONUMENTS_SHAPEFILE_PATH = './data/monuments/Scheduled_Monuments.shp'
+GB_SHAPEFILE_PATH = 'gb/infuse_gb_2011.shp'
+MONUMENTS_SHAPEFILE_PATH = 'monuments/Scheduled_Monuments.shp'
 # Relative paths (relative to DATA_PATH/{tile_ref} )
 FEATURES_PATH = 'features'
 MASKS_PATH = 'masks'
@@ -38,27 +38,27 @@ def _n_subtiles(M, L):
 
 
 @lru_cache(maxsize=None)
-def _get_shape(id):
+def _get_shape(shapes_directory, id):
     """Wrapper for accessing shapes from config paths"""
     if id == 'gb':
-        path = GB_SHAPEFILE_PATH
+        path = os.path.join(shapes_directory, GB_SHAPEFILE_PATH)
     elif id == 'monuments':
-        path = MONUMENTS_SHAPEFILE_PATH
+        path = os.path.join(shapes_directory, MONUMENTS_SHAPEFILE_PATH)
 
     return gpd.read_file(path)
 
 
-def get_gb():
+def get_gb(shapes_directory):
     """Returns a gpd table with one element containing the geometry of the GB coastline"""
-    return _get_shape('gb')
+    return _get_shape(shapes_directory, 'gb')
 
 
-def get_monuments():
+def get_monuments(shapes_directory):
     """
     Returns a gpd table for the Historic England Scheduled Monuments dataset. 
     Each row contains geometry + metadata of a single monument.
     """
-    return _get_shape('monuments')
+    return _get_shape(shapes_directory, 'monuments')
 
 
 def files_to_unzip(folder_path):
@@ -134,6 +134,9 @@ def hillshade(array, azimuth=315, angle_altitude=45):
     Original documentation:
     https://earthpy.readthedocs.io/en/latest/gallery_vignettes/plot_dem_hillshade.html?highlight=hillshade
     """
+    # Some -1e38 values exist, this floors it to stop runtime overflow warning
+    array[array < -1e6] = -1e6
+
     azimuth = 360.0 - azimuth
     x, y = np.gradient(array)
     slope = np.pi/2. - np.arctan(np.sqrt(x*x + y*y))
@@ -215,11 +218,16 @@ def files_to_process(data_raw_path, data_out_path, output_image_size):
     return done, todo
 
 
-def create_features_and_masks(tile_ref, data_raw_path, L=256, channels=3):
+def create_features_and_masks(tile_ref, data_raw_path, shapes_directory='./', L=256, channels=3, logger=logging.getLogger()):
     elevation, transform, tile_geometry = get_tile(tile_ref, data_raw_path)
-    gb = get_gb()
-    monuments = get_monuments()
+    logger.debug(f"DONE: get_tile() for {tile_ref}")
+
+    gb = get_gb(shapes_directory)
+    monuments = get_monuments(shapes_directory)
+    logger.debug(f"DONE: get_gb() and get_monuments() for {tile_ref}")
+
     hillstack = hill_stack(elevation, channels, 10)
+    logger.debug(f"DONE: hill_stack() for {tile_ref}")
 
     overlaps = monuments.intersects(tile_geometry['geometry'].any())
     monuments_geoms = list(monuments[overlaps]['geometry'])
@@ -229,7 +237,7 @@ def create_features_and_masks(tile_ref, data_raw_path, L=256, channels=3):
         monuments_mask = geometry_mask(
             monuments_geoms, transform=transform, invert=False, out_shape=elevation.shape)
     else:
-        monuments_mask = np.ones((L, L))
+        monuments_mask = np.ones(elevation.shape)
 
     boundary_mask = geometry_mask(
         gb_geoms, transform=transform, invert=True, out_shape=elevation.shape)
@@ -273,6 +281,15 @@ def create_features_and_masks(tile_ref, data_raw_path, L=256, channels=3):
         subtile_overlaps = monuments[monuments.intersects(subtile_shape)]
         subtile_overlaps = subtile_overlaps.to_dict('records')
 
+        # count the fraction of tile with missing lidar data (gradiens in x and y precisely 0)
+        lidar_coverage = ((np.diff(hillstack_mini, axis=0, prepend=hillstack_mini[(0,), :]) +
+                           np.diff(hillstack_mini, axis=1, prepend=hillstack_mini[:, (0,)])) != 0).sum() \
+            / np.size(hillstack_mini)
+
+        # count the fraction of tile overlapping with a monument
+        monument_coverage = (monuments_mask_mini == 0).sum() / \
+            np.size(monuments_mask_mini)
+
         # Count the fraction of pixels representing land.
         land_coverage = np.count_nonzero(
             boundary_mask_mini) / np.size(boundary_mask)
@@ -281,11 +298,15 @@ def create_features_and_masks(tile_ref, data_raw_path, L=256, channels=3):
                     'hillstack': hillstack_mini,
                     'monuments': monuments_mask_mini,
                     'metadata': {
-                        'id': f'{tile_ref}_{x0}_{y0}',
+                        'id': f"{tile_ref}_{x0}_{y0}",
                         'tile_ref': tile_ref,
-                        'index': (x0, y0),
-                        'origin': (easting, northing),
+                        'index_x': x0.astype('int'),
+                        'index_y': y0.astype('int'),
+                        'origin_easting': easting,
+                        'origin_northing': northing,
                         'land_coverage': land_coverage,
+                        'lidar_coverage': lidar_coverage,
+                        'monument_coverage': monument_coverage,
                         'subtile_overlaps': subtile_overlaps
 
                     }})
@@ -293,7 +314,7 @@ def create_features_and_masks(tile_ref, data_raw_path, L=256, channels=3):
     return data
 
 
-def process_dtm(dtm_dirs, data_raw_path, data_out_path, logger, output_image_size=256):
+def process_dtm(dtm_dirs, data_raw_path, data_out_path, shapes_directory, logger, output_image_size=256):
     """Perform LIDAR image processing steps on a list of unzipped directories.
 
     Args:
@@ -312,8 +333,8 @@ def process_dtm(dtm_dirs, data_raw_path, data_out_path, logger, output_image_siz
 
         logger.info(f"Creating features and masks for {tile_ref}")
         subtiles = create_features_and_masks(
-            tile_ref, data_raw_path, L=output_image_size, channels=3)
-
+            tile_ref, data_raw_path, shapes_directory, L=output_image_size, channels=3, logger=logger)
+        logger.info(f"Created subtiles for {tile_ref}")
         for subtile in subtiles:
             features = subtile['hillstack']
             mask = subtile['monuments']
@@ -338,4 +359,4 @@ if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger()
     cProfile.run(
-        "process_dtm(['LIDAR-DTM-1m-2022-NZ09se','LIDAR-DTM-1m-2022-NZ09nw'],'/mnt/d/lidarnn_raw_new', '/mnt/d/lidarnn', logger, 256)")
+        "process_dtm(['LIDAR-DTM-1m-2022-NZ09se','LIDAR-DTM-1m-2022-NZ09nw','LIDAR-DTM-1m-2022-NT60ne'],'/mnt/d/lidarnn_raw_new', '/mnt/d/lidarnn', '/mnt/d/lidarnn_shapes', logger, 256)")
