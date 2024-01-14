@@ -4,7 +4,6 @@ import concurrent.futures
 import multiprocessing
 import pandas as pd
 from functools import reduce
-import operator
 from tqdm import tqdm
 import re
 import signal
@@ -89,11 +88,13 @@ class Task:
             raise TaskTimeOut("timeout")
         signal.signal(signal.SIGALRM, handle_timeout)
 
-        while True:
+        sentinel_reached = False
+        while not sentinel_reached:
             try:
+                logger.info(f"Waiting for task")
                 task = queue_in.get()
-
                 logger.info(f"Got Task {task}")
+
                 if task is not None:
                     signal.alarm(self.timeout)
                     self.perform_task(task, logger)
@@ -106,7 +107,8 @@ class Task:
 
             else:
                 # Only send this downstream if it succeeded
-                queue_out.put(task)
+                if task is not None:
+                    queue_out.put(task)
 
             finally:
                 queue_in.task_done()
@@ -116,7 +118,8 @@ class Task:
                     logger.info(f"{LOG_EOF}")
                     for _ in range(self.fan_out):
                         queue_out.put(None)
-                    break
+
+                    sentinel_reached = True
 
     def perform_task(self, task, logger):
         """Actual task to perform to be implemented by derived classes"""
@@ -230,7 +233,7 @@ class DataPipeline:
             max_workers=1,
             fan_out=1,
             timeout=60,
-            pool_type='thread')
+            pool_type='process')
 
         self.unzipper = UnzipTask(
             data_raw_path,
@@ -286,18 +289,10 @@ class DataPipeline:
             # ___________________________________________________________________
             # | Filename    | Size  | Downloader    | Unzipper  | Preprocessor  |
             # | DTM-1m-...  | 45123 | 1             | 0         | 0             |
-
-            lines = []
             df_rows = []
-            # lines.append(['Filename', 'Size'] +
-            #             [task.task_name for task in self.tasks].join(','))
-            # lines.append(f"Filename,Size," +
-            #             ','.join([task.task_name for task in self.tasks]))
             for file, size in all_files.items():
                 df_rows.append(
                     [file, size] + [int(file in done) for done in done_for_tasks])
-                # lines.append(
-                #    f"{file},{size}," + ','.join([f"{int(file in done)}" for done in done_for_tasks]))
             df = pd.DataFrame(df_rows, columns=[
                 "Filename", "Size"] + [task.task_name for task in self.tasks])
 
@@ -352,7 +347,7 @@ class DataPipeline:
                 q_download.put([task])
             for task in todos_for_tasks[1][:N]:
                 q_unzip.put([task])
-            for task in todos_for_tasks[2][:N]:
+            for task in todos_for_tasks[2][:1]:
                 q_preprocess.put([task])
 
             q_download_size = q_download.qsize()
@@ -360,7 +355,7 @@ class DataPipeline:
             q_preprocess_size = q_preprocess.qsize()
             q_download.put(None)
 
-            download_pool = concurrent.futures.ThreadPoolExecutor(
+            download_pool = concurrent.futures.ProcessPoolExecutor(
                 max_workers=self.downloader.max_workers)
             unzip_pool = concurrent.futures.ProcessPoolExecutor(
                 max_workers=self.unzipper.max_workers)
@@ -437,6 +432,6 @@ if __name__ == '__main__':
         remote_ls_file='ls.txt',
         shape_path='/mnt/d/lidarnn_shapes')
 
-    pipeline.run(N=200)
+    pipeline.run(N=20)
 
     logging.info("=================Ending...===========================")
