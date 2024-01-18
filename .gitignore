@@ -8,6 +8,7 @@ sftpconfig.json
 # notebooks
 notebooks/
 *.ipynb
+*.ipynb_checkpoints/
 
 # data 
 data/monuments/
@@ -19,3 +20,4 @@ data/lidar
 *.txt
 *.log
 *.csv
+*.json

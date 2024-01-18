@@ -305,16 +305,16 @@ class DataPipeline:
         df_before['Tag'] = 'Before'
         df_after['Tag'] = 'After'
         df_full = pd.concat([df_before, df_after])
+        df_full['SizeDownloaded'] = df_full['Size'] * df_full['Downloaded']
+        df_full['SizeProcessed'] = df_full['Size'] * df_full['Processed']
         summary = df_full.groupby('Tag').agg(
             TotalSize=('Size', 'sum'),
             TotalNumber=('Size', 'count'),
             NumberDownloaded=('Downloader', 'sum'),
             NumberUnzipped=('Unzipper', 'sum'),
             NumberProcessed=('Preprocessor', 'sum'),
-            SizeDownloaded=(
-                'Size', lambda x: (df_full.loc[x.index, 'Downloader'] * df_full.loc[x.index, 'Size']).sum()),
-            SizeProcessed=(
-                'Size', lambda x: (df_full.loc[x.index, 'Preprocessor'] * df_full.loc[x.index, 'Size']).sum())
+            SizeDownloaded=('SizeDownloaded', 'sum'),
+            SizeProcessed=('SizeProcessed', 'sum'),
         )
 
         summary['TotalSize'] /= 1e6
@@ -347,7 +347,7 @@ class DataPipeline:
                 q_download.put([task])
             for task in todos_for_tasks[1][:N]:
                 q_unzip.put([task])
-            for task in todos_for_tasks[2][:1]:
+            for task in todos_for_tasks[2][:N]:
                 q_preprocess.put([task])
 
             q_download_size = q_download.qsize()
@@ -432,6 +432,6 @@ if __name__ == '__main__':
         remote_ls_file='ls.txt',
         shape_path='/mnt/d/lidarnn_shapes')
 
-    pipeline.run(N=20)
+    pipeline.run(N=500)
 
     logging.info("=================Ending...===========================")
