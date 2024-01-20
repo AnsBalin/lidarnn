@@ -41,7 +41,7 @@ The model can be found in `model/unet.py`
 
 The scripts under `data/` perform the bulk of data aquisition and preprocessing.
 
-- `data/lidar_downloader.py` SFTP interface (using [`paramiko`](https://www.paramiko.org/)) for connecting to the DEFRA ftp server, listing contents and downloading data in smaller chunks.
+- `data/lidar_downloader.py` SFTP interface (using [`paramiko`](https://www.paramiko.org/)) for connecting to the DEFRA ftp server, listing contents and downloading data in smaller chunks. For this to work see below.
 
 - `data/lidar_helper.py` Helper functions for processing LIDAR data into model-ready features. Uses [`rasterio`](https://rasterio.readthedocs.io/en/stable/) and [`geopandas`](https://geopandas.org/en/stable/).
 
@@ -67,3 +67,44 @@ _[Under construction]_
 ## Results
 
 _[Under construction]_
+
+## How to run
+
+If you want to run this code yourself, you will need to download the following data:
+
+1. [UK National Lidar Programme](https://www.data.gov.uk/dataset/f0db0249-f17b-4036-9e65-309148c97ce4/national-lidar-programme). Refer to the link for download options. If downloading via sftp, create the following file in the project root named `sftpconfig.json`:
+
+```json
+{
+  "SFTP_USER": "",
+  "SFTP_HOST": "",
+  "SFTP_PASSWORD": "",
+  "SFTP_REMOTE_DIRECTORY": ""
+}
+```
+
+2. [Historic England Scheduled Monuments](]https://opendata-historicengland.hub.arcgis.com/datasets/historicengland::national-heritage-list-for-england-nhle/explore?layer=6&location=52.175175%2C-2.574311%2C6.6) Extract to `{SHAPE_PATH}/monuments/` such that this file exists `{SHAPE_PATH}/monuments/Scheduled_monuments.shp`.
+3. [UK boundaries](https://statistics.ukdataservice.ac.uk/dataset/2011-census-geography-boundaries-great-britain). This is used to mask out the sea on tiles straddling the coastline. Extract to `{SHAPE_PATH}/gb/`.
+
+### Run full data pipeline
+
+```python
+from data.lidar_plan import DataPipeline
+from data.lidar_downloader import list_files
+
+# Run this the first time - it lists the contents of all DTM files on the remote
+# server and saves it to ./ls.txt. This file is subsequently used to manage the task queue.
+list_files('sftpconfig.json', 'ls.txt')
+
+pipeline = DataPipeline(
+        data_raw_path = RAW_PATH, # location .zip files will be downloaded to
+        data_out_path = OUT_PATH, # location preprocessed features and masks will be places
+        shape_path = SHAPE_PATH   # location that the monuments and UK boundaries datasets extracted to
+        remote_ls_file = 'ls.txt',
+    )
+
+# Run entire pipeline on first 500 items. By default it will spin up 1 process for downloading,
+# 1 for unzipping, and 2 for preprocessing
+pipeline.run(N=500)
+
+```
