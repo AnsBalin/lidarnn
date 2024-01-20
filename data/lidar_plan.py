@@ -305,8 +305,8 @@ class DataPipeline:
         df_before['Tag'] = 'Before'
         df_after['Tag'] = 'After'
         df_full = pd.concat([df_before, df_after])
-        df_full['SizeDownloaded'] = df_full['Size'] * df_full['Downloaded']
-        df_full['SizeProcessed'] = df_full['Size'] * df_full['Processed']
+        df_full['SizeDownloaded'] = df_full['Size'] * df_full['Downloader']
+        df_full['SizeProcessed'] = df_full['Size'] * df_full['Processor']
         summary = df_full.groupby('Tag').agg(
             TotalSize=('Size', 'sum'),
             TotalNumber=('Size', 'count'),
@@ -347,7 +347,7 @@ class DataPipeline:
                 q_download.put([task])
             for task in todos_for_tasks[1][:N]:
                 q_unzip.put([task])
-            for task in todos_for_tasks[2][:N]:
+            for task in todos_for_tasks[2][:1]:
                 q_preprocess.put([task])
 
             q_download_size = q_download.qsize()
