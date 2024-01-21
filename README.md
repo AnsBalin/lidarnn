@@ -100,7 +100,7 @@ list_files('sftpconfig.json', 'ls.txt')
 
 pipeline = DataPipeline(
         data_raw_path = RAW_PATH, # location .zip files will be downloaded to
-        data_out_path = OUT_PATH, # location preprocessed features and masks will be places
+        data_out_path = OUT_PATH, # location preprocessed features and masks will be placed
         shape_path = SHAPE_PATH,   # location that the monuments and UK boundaries datasets extracted to
         remote_ls_file = 'ls.txt'
     )
