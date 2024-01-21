@@ -4,12 +4,12 @@ import math
 import torch
 import torch.nn as nn
 from torch import optim
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader, Subset, random_split
 import torch.nn.functional as F
 
 from model.unet import UNet
 
-from util.data_loading import LidarDatasetSynthetic
+from util.data_loading import LidarDatasetSynthetic, LidarDataset
 
 
 def dice_coeff(input, target, reduce_batch_first=False, epsilon=1e-6):
@@ -29,25 +29,32 @@ def dice_coeff(input, target, reduce_batch_first=False, epsilon=1e-6):
 
 def train_model(
         model,
-        device,
-        features_path,
-        masks_path,
+        device,  # TODO: use device parameter in train_model
+        data_path,
         epochs: int = 10,
         batch_size: int = 5,
         learning_rate: float = 1e-5,
         weight_decay: float = 1e-8,
         momentum: float = 0.999,
         pct_val: float = 0.1,
+        synthetic: bool = False,
 
 ):
-    dataset = LidarDatasetSynthetic(features_path, masks_path, 1000)
+    if synthetic:
+        dataset = LidarDatasetSynthetic(data_path, 1000)
+    else:
+        dataset = LidarDataset(data_path)
+
     n_val = int(len(dataset) * pct_val)
     n_train = len(dataset) - n_val
 
-    train_set, val_set = random_split(dataset, [n_train, n_val],
-                                      generator=torch.Generator().manual_seed(0))
+    # train_set, val_set = random_split(dataset, [n_train, n_val],
+    #                                  generator=torch.Generator().manual_seed(0))
+    train_set = Subset(dataset, list(range(n_train)))
+    val_set = Subset(dataset, list(range(n_train, n_val+n_train)))
+
     loader_args = dict(batch_size=batch_size)
-    train_loader = DataLoader(train_set, shuffle=True, **loader_args)
+    train_loader = DataLoader(train_set, shuffle=False, **loader_args)
     val_loader = DataLoader(val_set, shuffle=False,
                             drop_last=True, **loader_args)
 
