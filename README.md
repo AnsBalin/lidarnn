@@ -1,10 +1,12 @@
-# LIDAR.nn
+# Lidar.nn
 
-## _Discovering ancient sites from UK LIDAR data_
+## _Discovering ancient sites from UK Lidar data_
 
-This repo contains a suite of tools used for training an image segmentation model on UK LIDAR data with the aim of detecting archaeological features in the landscape not readily visible in satellite imagery.
+This repo contains a suite of tools used for training an image segmentation model on UK Lidar data with the aim of detecting archaeological features in the landscape not readily visible in satellite imagery.
 
 ### The data
+
+![example_data](img/camp.png)
 
 #### Features
 
@@ -27,11 +29,11 @@ We can anticipate that absolute elevation data will be less useful to the model 
 
 #### Labels
 
-The [Historic England Scheduled Monuments](]https://opendata-historicengland.hub.arcgis.com/datasets/historicengland::national-heritage-list-for-england-nhle/explore?layer=6&location=52.175175%2C-2.574311%2C6.61) dataset
+The [Historic England Scheduled Monuments](]https://opendata-historicengland.hub.arcgis.com/datasets/historicengland::national-heritage-list-for-england-nhle/explore?layer=6&location52.175175%2C-2.574311%2C6.61) dataset covers close to 20,000 scheduled monuments across the UK. Examples include Roman-era sites, barrows and tumuli, castles, earthworks, and the remains of ancient villages. Each element of this dataset consists of a detailed polygon tracing the perimeter of the feature which makes it an excellent candidate for use as a training label as it precisely masks the geographical features that the Lidar data gives us access to.
 
 ### The model
 
-Our task is to build and train a neural network model that given an input image based on LIDAR data, can output a binary mask that segments the image into areas containing archaeological features. The first model architecture we will apply will be the [U-Net](https://arxiv.org/abs/1505.04597) architecture, first developed for biomedical image segmentation.
+Our task is to build and train a neural network model that given an input image based on Lidar data, can output a binary mask that segments the image into areas containing archaeological features. The first model architecture we will apply will be the [U-Net](https://arxiv.org/abs/1505.04597) architecture, first developed for biomedical image segmentation.
 
 The model can be found in `model/unet.py`
 
@@ -41,9 +43,9 @@ The model can be found in `model/unet.py`
 
 The scripts under `data/` perform the bulk of data aquisition and preprocessing.
 
-- `data/lidar_downloader.py` SFTP interface (using [`paramiko`](https://www.paramiko.org/)) for connecting to the DEFRA ftp server, listing contents and downloading data in smaller chunks. For this to work see below.
+- `data/lidar_downloader.py` SFTP interface (using [`paramiko`](https://www.paramiko.org/)) for connecting to the DEFRA ftp server, listing contents and downloading data in smaller chunks. For this to work, see [How To Run](#How-to-Run).
 
-- `data/lidar_helper.py` Helper functions for processing LIDAR data into model-ready features. Uses [`rasterio`](https://rasterio.readthedocs.io/en/stable/) and [`geopandas`](https://geopandas.org/en/stable/).
+- `data/lidar_helper.py` Helper functions for processing Lidar data into model-ready features. Uses [`rasterio`](https://rasterio.readthedocs.io/en/stable/) and [`geopandas`](https://geopandas.org/en/stable/).
 
 - `data/lidar_plan.py` manages processing pipeline asynchronously using task queues shared between multiple processes. This helps speed up overall work, as well as being able to run the pipeline on smaller chunks for testing before scaling up.
 
@@ -99,12 +101,13 @@ list_files('sftpconfig.json', 'ls.txt')
 pipeline = DataPipeline(
         data_raw_path = RAW_PATH, # location .zip files will be downloaded to
         data_out_path = OUT_PATH, # location preprocessed features and masks will be places
-        shape_path = SHAPE_PATH   # location that the monuments and UK boundaries datasets extracted to
-        remote_ls_file = 'ls.txt',
+        shape_path = SHAPE_PATH,   # location that the monuments and UK boundaries datasets extracted to
+        remote_ls_file = 'ls.txt'
     )
 
 # Run entire pipeline on first 500 items. By default it will spin up 1 process for downloading,
 # 1 for unzipping, and 2 for preprocessing
 pipeline.run(N=500)
-
 ```
+
+See the `if __name__=='__main__'` section of `data/lidar_plan.py` for example usage
